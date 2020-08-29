@@ -3,14 +3,25 @@
 #include <WiFi.h>
 #include "FirebaseESP32.h"
 #include <Adafruit_Sensor.h>
+
+#include <PubSubClient.h>
+
 #include <DHT.h>
 #include <DHT_U.h>
 
-#define FIREBASE_HOST "my-first-firebase-projec-d7eac.firebaseio.com" //Change to your Firebase RTDB project ID e.g. Your_Project_ID.firebaseio.com
-#define FIREBASE_AUTH "ZYhtRPsJTEnCGjRPxBmhJ3gvhtJm5QQbFlqjNpFy" //Change to your Firebase RTDB secret password
+#define DHTTYPE DHT11
+
 #define WIFI_SSID "Tamagna_2.4G"
 #define WIFI_PASSWORD "30033003"
-#define DHTTYPE DHT11
+
+#define FIREBASE_HOST "my-first-firebase-projec-d7eac.firebaseio.com" //Change to your Firebase RTDB project ID e.g. Your_Project_ID.firebaseio.com
+#define FIREBASE_AUTH "ZYhtRPsJTEnCGjRPxBmhJ3gvhtJm5QQbFlqjNpFy" //Change to your Firebase RTDB secret password
+
+#define TOKEN "BBFF-EMbMYuTvx68o3ZIxXkfdhLSDY9PMOt" // Put your Ubidots' TOKEN
+#define MQTT_CLIENT_NAME "ESP32_01" // MQTT client Name, please enter your own 8-12 alphanumeric character ASCII string; 
+#define VARIABLE_LABEL1 "temperature" // Assing the variable label
+#define VARIABLE_LABEL2 "humidity" // Assing the variable label
+#define DEVICE_LABEL "esp32" // Assig the device label
 
 const int ledPin = 21;
 const int sensorPin = 4;
@@ -19,10 +30,46 @@ const int deviceId = 1;
 float currentTemp = 0.0;
 float currentHumid = 0.0;
 
+char mqttBroker[]  = "industrial.api.ubidots.com";
+char payload[100];
+char topic[150];
+// Space to store values to send
+char str_sensor[10];
+
 //Define FirebaseESP32 data object
 DHT_Unified dht(sensorPin, DHTTYPE);
 FirebaseData firebaseData;
 FirebaseJson json;
+
+WiFiClient ubidots;
+PubSubClient client(ubidots);
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  char p[length + 1];
+  memcpy(p, payload, length);
+  p[length] = NULL;
+  String message(p);
+  Serial.write(payload, length);
+  Serial.println(topic);
+}
+
+void reconnect() {
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.println("Attempting MQTT connection...");
+    
+    // Attemp to connect
+    if (client.connect(MQTT_CLIENT_NAME, TOKEN, "")) {
+      Serial.println("Connected");
+    } else {
+      Serial.print("Failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 2 seconds");
+      // Wait 2 seconds before retrying
+      delay(2000);
+    }
+  }
+}
  
 void setup()
 { 
@@ -72,7 +119,10 @@ void setup()
   //tiny, small, medium, large and unlimited.
   //Size and its write timeout e.g. tiny (1s), small (10s), medium (30s) and large (60s).
   Firebase.setwriteSizeLimit(firebaseData, "tiny");
+  client.setServer(mqttBroker, 1883);
+  client.setCallback(callback);  
   Serial.println("Connected...");
+  delay(5000);
 }
  
 void loop()
@@ -119,8 +169,37 @@ void loop()
   Firebase.updateNode(firebaseData, "/"+dbName+"/"+String(deviceId), json);
   json.set("/humid", String(strHumid));
   Firebase.updateNode(firebaseData, "/"+dbName+"/"+String(deviceId), json);
+  Serial.println("Sent to Firebase!");
   digitalWrite(ledPin, HIGH);
   delay(200);
   digitalWrite(ledPin, LOW);
-  delay(10000);
+  delay(200);
+
+  if (!client.connected()) {
+    reconnect();
+  }
+  sprintf(topic, "%s%s", "/v1.6/devices/", DEVICE_LABEL);
+  sprintf(payload, "%s", ""); // Cleans the payload
+  sprintf(payload, "{\"%s\":", VARIABLE_LABEL1); // Adds the variable label
+  float sensor = currentTemp;
+  dtostrf(sensor, 4, 2, str_sensor);
+  sprintf(payload, "%s {\"value\": %s}}", payload, str_sensor); // Adds the value
+  Serial.println("Publishing data to Ubidots Cloud");
+  client.publish(topic, payload);
+  client.loop();
+  sprintf(topic, "%s%s", "/v1.6/devices/", DEVICE_LABEL);
+  sprintf(payload, "%s", ""); // Cleans the payload
+  sprintf(payload, "{\"%s\":", VARIABLE_LABEL2); // Adds the variable label
+  sensor = currentHumid;
+  dtostrf(sensor, 4, 2, str_sensor);
+  sprintf(payload, "%s {\"value\": %s}}", payload, str_sensor); // Adds the value
+  Serial.println("Publishing data to Ubidots Cloud");
+  client.publish(topic, payload);
+  client.loop();
+  Serial.println("Sent to Udibots!");
+  
+  digitalWrite(ledPin, HIGH);
+  delay(200);
+  digitalWrite(ledPin, LOW);
+  delay(30000);
 }
